@@ -67,7 +67,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             #loss = (pred - data.y[:, target])
             #loss = loss.pow(2).mean()
             #atomref_value = atomref(data.z)
-
+            if len(pred.shape)==1:
+                pred=pred[:,None]            
             loss = criterion(pred, (data.y[:, target] - task_mean) / task_std)
         
         optimizer.zero_grad()

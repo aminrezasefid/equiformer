@@ -30,7 +30,7 @@ _RESCALE = True
 _USE_BIAS = True
 
 # QM9
-_MAX_ATOM_TYPE = 5
+_MAX_ATOM_TYPE = 118
 # Statistics of QM9 with cutoff radius = 5
 _AVG_NUM_NODES = 18.03065905448718
 _AVG_DEGREE = 15.57930850982666
@@ -868,8 +868,13 @@ class GraphAttentionTransformer(torch.nn.Module):
         edge_vec = pos.index_select(0, edge_src) - pos.index_select(0, edge_dst)
         edge_sh = o3.spherical_harmonics(l=self.irreps_edge_attr,
             x=edge_vec, normalize=True, normalization='component')
-        
-        node_atom = node_atom.new_tensor([-1, 0, -1, -1, -1, -1, 1, 2, 3, 4])[node_atom]
+        #print(node_atom)
+        max_index = node_atom.max().item() + 1  # Ensures it covers all indices in node_atom
+        atomic_mapping = torch.full((max_index,), -1, dtype=torch.long).to(node_atom.device)
+        atomic_mapping[1] = 0
+        atomic_mapping[6:] = torch.arange(1, max_index - 5, dtype=torch.long)
+        node_atom = atomic_mapping[node_atom]
+        #node_atom = node_atom.new_tensor([-1, 0, -1, -1, -1, -1, 1, 2, 3, 4])[node_atom]
         atom_embedding, atom_attr, atom_onehot = self.atom_embed(node_atom)
         edge_length = edge_vec.norm(dim=1)
         #edge_length_embedding = sin_pos_embedding(x=edge_length, 
