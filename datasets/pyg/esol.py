@@ -31,35 +31,25 @@ from torch_geometric.nn import radius_graph
 
 
 
-qm7_target_dict: Dict[int, str] = {
-    "u0_atom": 0,
+
+
+URLS = {
+    "precise3d": "https://drive.google.com/uc?export=download&id=1jvbadpMz7A7Dtggfw3i2R4BT8F2WQNDa",
+    "optimized3d": "https://drive.google.com/uc?export=download&id=1spz8XILpSjF6JrasaSeqyNuKqozfEf_N",
+    "rdkit3d": "https://drive.google.com/uc?export=download&id=1UyYiVBXm5hWkl6AuBDRRUhOzB4yTr9Mp",
+    "rdkit2d": "https://drive.google.com/uc?export=download&id=1DbJ4t31GOWN9zqirlrkfdeSFzlQdVWqn",
 }
 
-SKIP_LIST = [
-    "1 2.753415 1.686911 2.122795",
-    "1 4.940981 0.903782 0.860442",
-    "1 5.189535 2.297423 -0.368037",
-    "1 1.964094 4.093345 0.737567",
-]
-# for pre-processing target based on atom ref
-URLS = {
-    "precise3d": "https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/gdb7.tar.gz",
-    "rdkit3d": "https://drive.google.com/uc?export=download&id=1ROIGtfrxVP1f9NiQDLNLCtOzWEjLyxJq",
-    "optimized3d": "https://drive.google.com/uc?export=download&id=1FdIzgupmFGZHwkoxM5IdUY82VoGd-gvf",
-    "rdkit2d": "https://drive.google.com/uc?export=download&id=1cFE2X2PeGP9wVOhr4AOYvqTGTCvuFoM9",
-    "pubchem3d": "https://drive.google.com/uc?export=download&id=1zaNUsbLNARMU89sC9UsBLPkTnRG4sl0X",
-}
-class QM7(InMemoryDataset):
+esol_target_dict = {"measured log solubility in mols per litre": 0}
+
+class Esol(InMemoryDataset):
     """
     1. This is the QM9 dataset, adapted from Pytorch Geometric to incorporate 
     cormorant data split. (Reference: Geometric and Physical Quantities improve 
     E(3) Equivariant Message Passing)
     2. Add pair-wise distance for each graph. """
 
-    raw_url = ('https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/'
-               'molnet_publish/qm9.zip')
-    raw_url2 = 'https://ndownloader.figshare.com/files/3195404'
-    processed_url = 'https://data.pyg.org/datasets/qm9_v3.zip'
+    
     @property
     def target_names(self) -> List[str]:
         """Returns the names of the available target properties.
@@ -67,9 +57,9 @@ class QM7(InMemoryDataset):
         Otherwise returns all available target names.
         """
         if hasattr(self, 'labels') and self.labels is not None:
-            return [name for name, idx in qm7_target_dict.items() 
+            return [name for name, idx in esol_target_dict.items() 
                    if idx in self.labels]
-        return list(qm7_target_dict.keys())
+        return list(esol_target_dict.keys())
     def __init__(
         self,
         root: str,
@@ -83,9 +73,9 @@ class QM7(InMemoryDataset):
         self.structure = structure
         self.raw_url = URLS[structure]
         self.labels = (
-            [qm7_target_dict[label] for label in dataset_args]
+            [esol_target_dict[label] for label in dataset_args]
             if dataset_args is not None
-            else list(qm7_target_dict.keys())
+            else list(esol_target_dict.keys())
         )
         transform = self._filter_label
         super().__init__(
@@ -113,13 +103,9 @@ class QM7(InMemoryDataset):
         try:
             import rdkit  # noqa
 
-            return (
-                ["gdb7.sdf", "gdb7.sdf.csv"]
-                if self.structure != "pubchem3d"
-                else ["qm7.sdf", "qm7.sdf.csv"]
-            )
+            return ["ESOL.sdf", "ESOL.sdf.csv"]
         except ImportError:
-            return ["qm7_v3"]
+            return ImportError("Please install 'rdkit' to download the dataset.")
 
 
     @property
@@ -151,21 +137,29 @@ class QM7(InMemoryDataset):
             assert False, "Install rdkit-pypi"
 
         
-        types = {"H": 0, "C": 1, "N": 2, "O": 3, "F": 4, "S": 5}
+        types = {
+            "O": 0,
+            "C": 1,
+            "N": 2,
+            "H": 3,
+            "S": 4,
+            "Cl": 5,
+            "P": 6,
+            "F": 7,
+            "I": 8,
+            "Br": 9,
+        }
         bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
 
-        with open(self.raw_paths[1], "r") as f:
-            target = [
-                [float(x) for x in line.split(",")]
-                for line in f.read().split("\n")[1:-1]
-            ]
+        with open(self.raw_paths[1], 'r') as f:
+            target = [[float(x)
+                       for x in line.split(',')]
+                      for line in f.read().split('\n')[1:-1]]
             y = torch.tensor(target, dtype=torch.float)
 
         suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=False,
                                    sanitize=False)
         data_list = []
-        inval_counter = 0
-        
         for i, mol in enumerate(tqdm(suppl)):
 
             N = mol.GetNumAtoms()
@@ -237,22 +231,14 @@ class QM7(InMemoryDataset):
             x = torch.cat([x1, x2], dim=-1)
 
             name = mol.GetProp('_Name')
-            if name in SKIP_LIST:
-                inval_counter += 1
-                continue  
-            if self.structure == "precise3d":
-                try:
-                    name = Chem.MolToSmiles(mol, isomericSmiles=False)
-                    mol.UpdatePropertyCache()
-                except:
-                    continue
+            
 
             smiles = Chem.MolToSmiles(mol, isomericSmiles=True)      
 
             data = Data(x=x, pos=pos, z=z, edge_index=edge_index, 
-                edge_attr=edge_attr, name=name, index=i - inval_counter, 
+                edge_attr=edge_attr, name=name, index=i, 
                 smiles=smiles,
-                y=y[i - inval_counter].unsqueeze(0),
+                y=y[i].unsqueeze(0),
                 edge_d_index=edge_d_index, edge_d_attr=edge_d_attr)
             data_list.append(data)
             

@@ -29,7 +29,6 @@ class AverageMeter:
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     norm_factor: list, 
-                    target: int,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, 
                     model_ema: Optional[ModelEma] = None,  
@@ -57,6 +56,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     
     for step, data in enumerate(data_loader):
         data = data.to(device)
+        #if data.shape[0]==1
         #data.edge_d_index = radius_graph(data.pos, r=10.0, batch=data.batch, loop=True)
         #data.edge_d_attr = data.edge_attr
         with amp_autocast():
@@ -67,9 +67,12 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             #loss = (pred - data.y[:, target])
             #loss = loss.pow(2).mean()
             #atomref_value = atomref(data.z)
+
+            if len(pred.shape)==0:
+                pred=pred[None,None]
             if len(pred.shape)==1:
-                pred=pred[:,None]            
-            loss = criterion(pred, (data.y[:, target] - task_mean) / task_std)
+                pred=pred[:,None]
+            loss = criterion(pred, (data.y - task_mean) / task_std)
         
         optimizer.zero_grad()
         if loss_scaler is not None:
@@ -83,8 +86,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         
         #err = (pred.detach() * task_std + task_mean) - data.y[:, target]
         #err_list += [err.cpu()]
+        #print(pred.shape)
         loss_metric.update(loss.item(), n=pred.shape[0])
-        err = pred.detach() * task_std + task_mean - data.y[:, target]
+        err = pred.detach() * task_std + task_mean - data.y
         mae_metric.update(torch.mean(torch.abs(err)).item(), n=pred.shape[0])
         
         if model_ema is not None:
@@ -108,7 +112,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     return mae_metric.avg
 
 
-def evaluate(model, norm_factor, target, data_loader, device, amp_autocast=None, 
+def evaluate(model, norm_factor, data_loader, device, amp_autocast=None, 
     print_freq=100, logger=None):
     
     model.eval()
@@ -133,10 +137,13 @@ def evaluate(model, norm_factor, target, data_loader, device, amp_autocast=None,
                     node_atom=data.z,
                     edge_d_index=data.edge_d_index, edge_d_attr=data.edge_d_attr)
                 pred = pred.squeeze()
-            
-            loss = criterion(pred, (data.y[:, target] - task_mean) / task_std)
+            if len(pred.shape)==0:
+                pred=pred[None,None]
+            if len(pred.shape)==1:
+                pred=pred[:,None]
+            loss = criterion(pred, (data.y - task_mean) / task_std)
             loss_metric.update(loss.item(), n=pred.shape[0])
-            err = pred.detach() * task_std + task_mean - data.y[:, target]
+            err = pred.detach() * task_std + task_mean - data.y
             mae_metric.update(torch.mean(torch.abs(err)).item(), n=pred.shape[0])
         
     return mae_metric.avg, loss_metric.avg

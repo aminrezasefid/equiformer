@@ -23,6 +23,7 @@ def generate_scaffold(smiles, include_chirality=False):
         print(e)
         return None
     return scaffold
+
 def scaffold_split( dataset, 
             frac_train=None, 
             frac_val=None, 
@@ -84,11 +85,18 @@ class DataModule:
         self._saved_dataloaders = dict()
     @property
     def target_idx(self):
-        num_targets=self.dataset[0].y.shape[1]
-        return [i for i in range(num_targets)]
+        target_idx=self.dataset.labels
+        return target_idx
     @property
     def hparams(self):
         return self._hparams
+    
+    def get_unique_atomic_numbers(self):
+        unique_z = set()
+        for data in self.dataset:
+            unique_z.update(data.z.tolist())
+        return sorted(list(unique_z))
+
     def setup(self):
         self.dataset = getattr(datasets, self.hparams["dataset"])(
                     root=self.hparams["dataset_root"] + "-" + self.hparams["structure"],
@@ -153,7 +161,7 @@ class DataModule:
 
 
         data = tqdm(
-            self._get_dataloader(self.train_dataset, "val"),
+            self._get_dataloader(self.train_dataset, "train"),
             desc="computing mean and std",
         )
         atomref = None

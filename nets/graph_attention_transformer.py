@@ -739,6 +739,7 @@ class GraphAttentionTransformer(torch.nn.Module):
         irreps_node_embedding='128x0e+64x1e+32x2e', num_layers=6,
         irreps_node_attr='1x0e', irreps_sh='1x0e+1x1e+1x2e',
         max_radius=5.0,
+        output_channels='1x0e',
         number_of_basis=128, basis_type='gaussian', fc_neurons=[64, 64], 
         irreps_feature='512x0e',
         irreps_head='32x0e+16x1o+8x2e', num_heads=4, irreps_pre_attn=None,
@@ -747,10 +748,17 @@ class GraphAttentionTransformer(torch.nn.Module):
         norm_layer='layer',
         alpha_drop=0.2, proj_drop=0.0, out_drop=0.0,
         drop_path_rate=0.0,
+        unique_atomic_numbers=None,
         mean=None, std=None, scale=None, atomref=None):
         super().__init__()
-
+        atomic_to_class = {num: i for i, num in enumerate(unique_atomic_numbers)}
+        max_index = 119  # Ensures it covers all indices in node_atom
+        atomic_mapping = torch.full((max_index,), -1, dtype=torch.long)  
+        for atomic_num, class_idx in atomic_to_class.items():
+            atomic_mapping[atomic_num] = class_idx
+        self.atomic_mapping=atomic_mapping
         self.max_radius = max_radius
+        self.output_channels=output_channels
         self.number_of_basis = number_of_basis
         self.alpha_drop = alpha_drop
         self.proj_drop = proj_drop
@@ -800,7 +808,7 @@ class GraphAttentionTransformer(torch.nn.Module):
         self.head = torch.nn.Sequential(
             LinearRS(self.irreps_feature, self.irreps_feature, rescale=_RESCALE), 
             Activation(self.irreps_feature, acts=[torch.nn.SiLU()]),
-            LinearRS(self.irreps_feature, o3.Irreps('1x0e'), rescale=_RESCALE)) 
+            LinearRS(self.irreps_feature, o3.Irreps(self.output_channels), rescale=_RESCALE)) 
         self.scale_scatter = ScaledScatter(_AVG_NUM_NODES)
         
         self.apply(self._init_weights)
@@ -869,13 +877,11 @@ class GraphAttentionTransformer(torch.nn.Module):
         edge_sh = o3.spherical_harmonics(l=self.irreps_edge_attr,
             x=edge_vec, normalize=True, normalization='component')
         #print(node_atom)
-        max_index = node_atom.max().item() + 1  # Ensures it covers all indices in node_atom
-        atomic_mapping = torch.full((max_index,), -1, dtype=torch.long).to(node_atom.device)
-        atomic_mapping[1] = 0
-        atomic_mapping[6:] = torch.arange(1, max_index - 5, dtype=torch.long)
-        node_atom = atomic_mapping[node_atom]
+        
+        node_atom = self.atomic_mapping[node_atom].to(node_atom.device)
         #node_atom = node_atom.new_tensor([-1, 0, -1, -1, -1, -1, 1, 2, 3, 4])[node_atom]
         atom_embedding, atom_attr, atom_onehot = self.atom_embed(node_atom)
+
         edge_length = edge_vec.norm(dim=1)
         #edge_length_embedding = sin_pos_embedding(x=edge_length, 
         #    start=0.0, end=self.max_radius, number=self.number_of_basis, 
@@ -905,10 +911,11 @@ class GraphAttentionTransformer(torch.nn.Module):
 
 
 @register_model
-def graph_attention_transformer_l2(irreps_in, radius, num_basis=128, 
-    atomref=None, task_mean=None, task_std=None, **kwargs):
+def graph_attention_transformer_l2(irreps_in, radius,output_channels, num_basis=128, 
+    atomref=None, task_mean=None, task_std=None,unique_atomic_numbers=None, **kwargs):
     model = GraphAttentionTransformer(
         irreps_in=irreps_in,
+        output_channels=f'{output_channels}x0e',
         irreps_node_embedding='128x0e+64x1e+32x2e', num_layers=6,
         irreps_node_attr='1x0e', irreps_sh='1x0e+1x1e+1x2e',
         max_radius=radius,
@@ -919,15 +926,17 @@ def graph_attention_transformer_l2(irreps_in, radius, num_basis=128,
         irreps_mlp_mid='384x0e+192x1e+96x2e',
         norm_layer='layer',
         alpha_drop=0.2, proj_drop=0.0, out_drop=0.0, drop_path_rate=0.0,
+        unique_atomic_numbers=unique_atomic_numbers,
         mean=task_mean, std=task_std, scale=None, atomref=atomref)
     return model
 
 
 @register_model
-def graph_attention_transformer_nonlinear_l2(irreps_in, radius, num_basis=128, 
-    atomref=None, task_mean=None, task_std=None, **kwargs):
+def graph_attention_transformer_nonlinear_l2(irreps_in, radius,output_channels, num_basis=128, 
+    atomref=None, task_mean=None, task_std=None,unique_atomic_numbers=None, **kwargs):
     model = GraphAttentionTransformer(
         irreps_in=irreps_in,
+        output_channels=f'{output_channels}x0e',
         irreps_node_embedding='128x0e+64x1e+32x2e', num_layers=6,
         irreps_node_attr='1x0e', irreps_sh='1x0e+1x1e+1x2e',
         max_radius=radius,
@@ -938,15 +947,17 @@ def graph_attention_transformer_nonlinear_l2(irreps_in, radius, num_basis=128,
         irreps_mlp_mid='384x0e+192x1e+96x2e',
         norm_layer='layer',
         alpha_drop=0.2, proj_drop=0.0, out_drop=0.0, drop_path_rate=0.0,
+        unique_atomic_numbers=unique_atomic_numbers,
         mean=task_mean, std=task_std, scale=None, atomref=atomref)
     return model
 
 
 @register_model
-def graph_attention_transformer_nonlinear_l2_e3(irreps_in, radius, num_basis=128, 
+def graph_attention_transformer_nonlinear_l2_e3(irreps_in, radius,output_channels, num_basis=128, 
     atomref=None, task_mean=None, task_std=None, **kwargs):
     model = GraphAttentionTransformer(
         irreps_in=irreps_in,
+        output_channels=f'{output_channels}x0e',
         irreps_node_embedding='128x0e+32x0o+32x1e+32x1o+16x2e+16x2o', num_layers=6,
         irreps_node_attr='1x0e', irreps_sh='1x0e+1x1o+1x2e',
         max_radius=radius,

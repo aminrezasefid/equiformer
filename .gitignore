@@ -1,3 +1,4 @@
 nets/
 __pycache__/
 data/
+output/

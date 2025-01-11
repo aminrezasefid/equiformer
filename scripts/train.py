@@ -7,6 +7,7 @@ import time
 import os
 import torch
 import sys
+import pandas as pd
 import numpy as np
 from torch_geometric.loader import DataLoader
 from typing import List
@@ -28,6 +29,7 @@ from timm.scheduler import create_scheduler
 from optim_factory import create_optimizer
 
 from engine import train_one_epoch, evaluate, compute_stats
+from module_utils.test import test_model
 
 # distributed training
 import utils
@@ -114,7 +116,7 @@ def get_args_parser():
     parser.add_argument('--test-size', type=number, default=0.1, help='Percentage/number of samples in test set (None to use all remaining samples)')
     parser.add_argument('--split', type=str, default='scaffold', choices=['random', 'scaffold'], help='Split type')
     parser.add_argument('--dataset', default=None, type=str, choices=datasets.__all__, help='Name of the torch_geometric dataset')
-    parser.add_argument('--dataset-args', default=None, type=List[str], help='Additional dataset argument, e.g. an array for target properties for QM9 or molecule for MD17. If not provided, all properties are used')
+    parser.add_argument('--dataset-args', type=str, default=None, help='Comma-separated list of dataset arguments')
     parser.add_argument('--dataset-root', default='data', type=str, help='Data storage directory (not used if dataset is "CG")')
     parser.add_argument('--structure', choices=["precise3d", "rdkit3d", "optimized3d", "rdkit2d", "pubchem3d"], default="precise3d", help='Structure of the input data')
     parser.add_argument('--feature-type', type=str, default='one_hot')
@@ -161,27 +163,27 @@ def main(args):
     _log.info('Training set mean: {}, std:{}'.format(
         data.mean, data.std))
     # calculate dataset stats
-    task_mean, task_std = 0, 1
+    task_mean, task_std = torch.tensor(0), torch.tensor(1)
     if args.standardize:
-        task_mean, task_std = data.mean, data.std
-    norm_factor = [task_mean, task_std]
-    
+        task_mean, task_std = data.mean, data.std    
     # since dataset needs random 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     #device = "cpu"
+    norm_factor = [task_mean.to(device), task_std.to(device)]
     ''' Network '''
     create_model = model_entrypoint(args.model_name)
     model = create_model(irreps_in=args.input_irreps, 
         radius=args.radius, num_basis=args.num_basis, 
-        out_channels=args.output_channels, 
+        output_channels=args.output_channels, 
         task_mean=task_mean, 
         task_std=task_std, 
         atomref=None, #train_dataset.atomref(args.target),
-        drop_path=args.drop_path)
-    _log.info(model)
+        drop_path=args.drop_path,
+        unique_atomic_numbers=data.get_unique_atomic_numbers())
+    #_log.info(model)
     model = model.to(device)
     
     model_ema = None
@@ -232,6 +234,7 @@ def main(args):
     best_epoch, best_train_err, best_val_err, best_test_err = 0, float('inf'), float('inf'), float('inf')
     best_ema_epoch, best_ema_val_err, best_ema_test_err = 0, float('inf'), float('inf')
     
+    
     for epoch in range(args.epochs):
         
         epoch_start_time = time.perf_counter()
@@ -242,15 +245,15 @@ def main(args):
             train_loader.sampler.set_epoch(epoch)
         
         train_err = train_one_epoch(model=model, criterion=criterion, norm_factor=norm_factor,
-            target=data.target_idx, data_loader=train_loader, optimizer=optimizer,
+             data_loader=train_loader, optimizer=optimizer,
             device=device, epoch=epoch, model_ema=model_ema, 
             amp_autocast=amp_autocast, loss_scaler=loss_scaler,
             print_freq=args.print_freq, logger=_log)
         
-        val_err, val_loss = evaluate(model, norm_factor, args.target, val_loader, device, 
+        val_err, val_loss = evaluate(model, norm_factor,  val_loader, device, 
             amp_autocast=amp_autocast, print_freq=args.print_freq, logger=_log)
         
-        test_err, test_loss = evaluate(model, norm_factor, args.target, test_loader, device, 
+        test_err, test_loss = evaluate(model, norm_factor,  test_loader, device, 
             amp_autocast=amp_autocast, print_freq=args.print_freq, logger=_log)
         
         # record the best results
@@ -259,9 +262,13 @@ def main(args):
             best_test_err = test_err
             best_train_err = train_err
             best_epoch = epoch
+            
+            # Save the best model
+            torch.save(model.state_dict(), f"{args.output_dir}/best_model.pth")
+            _log.info(f"Saved best model at epoch {epoch} with val MAE: {best_val_err:.5f}")
 
         info_str = 'Epoch: [{epoch}] Target: [{target}] train MAE: {train_mae:.5f}, '.format(
-            epoch=epoch, target=args.target, train_mae=train_err)
+            epoch=epoch, target=data.target_idx, train_mae=train_err)
         info_str += 'val MAE: {:.5f}, '.format(val_err)
         info_str += 'test MAE: {:.5f}, '.format(test_err)
         info_str += 'Time: {:.2f}s'.format(time.perf_counter() - epoch_start_time)
@@ -296,10 +303,21 @@ def main(args):
                 best_ema_epoch, best_ema_val_err, best_ema_test_err)
             _log.info(info_str)
 
+
+
+
+
+
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser('Training equivariant networks', parents=[get_args_parser()])
+    
     args = parser.parse_args()  
     if args.output_dir:
+        args.output_dir = os.path.join(args.output_dir, f"{args.dataset}-{args.structure}")
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    if args.dataset_args:
+        args.dataset_args = args.dataset_args.split(',')  # Convert comma-separated string to list
     main(args)
+    args.model_path=os.path.join(args.output_dir, f"best_model.pth")
+    test_model(args)
