@@ -39,7 +39,7 @@ def test_model(args):
     data = DataModule(args)
     data.setup()
     target_names = data.dataset.target_names
-    task_mean, task_std = 0, 1
+    task_mean, task_std = torch.tensor(0), torch.tensor(1)
     if args.standardize:
         task_mean, task_std = data.mean, data.std    
 
@@ -50,6 +50,7 @@ def test_model(args):
         output_channels=args.output_channels, 
         task_mean=task_mean, 
         task_std=task_std, 
+        task_type=args.task_type,
         atomref=None, #train_dataset.atomref(args.target),
         drop_path=args.drop_path,
         unique_atomic_numbers=data.get_unique_atomic_numbers())
@@ -68,6 +69,8 @@ def test_model(args):
     results = {"smiles":[]}
     for target in target_names:
         results[f"pred_{target}"] = []
+        if args.task_type=="class":
+            results[f"logit_{target}"] = []
         results[f"actual_{target}"] = []
         results[f"diff_{target}"] = []
 
@@ -86,8 +89,12 @@ def test_model(args):
             results[f"smiles"].append(data_batch.name)
             # Store predictions and labels for each target
             for i, target in enumerate(target_names):
-                pred[:, i] = pred[:, i] * task_std[i] + task_mean[i]  # De-normalize prediction
-                results[f"pred_{target}"].append(pred[:,i].cpu().numpy())
+                if args.task_type=="regr":
+                    pred[:, i] = pred[:, i] * task_std[i] + task_mean[i]  # De-normalize prediction
+                    results[f"pred_{target}"].append(pred[:,i].cpu().numpy())
+                else:
+                    results[f"pred_{target}"].append(pred[:,i].cpu().numpy().round())
+                    results[f"logit_{target}"].append(pred[:,i].cpu().numpy())
                 results[f"actual_{target}"].append(data_batch.y[:,i].cpu().numpy())
                 results[f"diff_{target}"].append(pred[:,i].cpu().numpy() - data_batch.y[:,i].cpu().numpy())
             # Print shapes of last items added for first target
@@ -103,6 +110,8 @@ def test_model(args):
         results[f"pred_{target}"] = np.concatenate(results[f"pred_{target}"])
         results[f"actual_{target}"] = np.concatenate(results[f"actual_{target}"])
         results[f"diff_{target}"] = np.concatenate(results[f"diff_{target}"])
+        if args.task_type=="class":
+            results[f"logit_{target}"] = np.concatenate(results[f"logit_{target}"])
 
     # Calculate differences
     # Create a DataFrame and save to CSV

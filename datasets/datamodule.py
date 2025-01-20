@@ -20,7 +20,7 @@ def generate_scaffold(smiles, include_chirality=False):
             smiles=smiles, includeChirality=include_chirality
         )
     except Exception as e:
-        print(e)
+        print("asd",e)
         return None
     return scaffold
 
@@ -141,9 +141,28 @@ class DataModule:
         if stage == "train":
             batch_size = self.hparams["batch_size"]
             shuffle = True
+            
+            # Add balanced sampling for BBBP dataset
+            unbalanced_datasets=["BBBP","Bace","Clintox"]
+            if self.hparams["dataset"] in unbalanced_datasets:
+                # Get labels for the subset
+                labels = torch.tensor([dataset[i]['y'] for i in range(len(dataset))])
+                class_sample_count = torch.bincount(labels.long())
+                weights = 1. / class_sample_count.float()
+                samples_weights = weights[labels.long()]
+                
+                sampler = torch.utils.data.WeightedRandomSampler(
+                    weights=samples_weights,
+                    num_samples=len(samples_weights),
+                    replacement=True
+                )
+                shuffle = False  # Don't shuffle when using sampler
+            else:
+                sampler = None
         elif stage in ["val", "test"]:
             batch_size = self.hparams["inference_batch_size"]
             shuffle = False
+            sampler = None
 
         dl = DataLoader(
             dataset=dataset,
@@ -151,6 +170,7 @@ class DataModule:
             shuffle=shuffle,
             num_workers=self.hparams["num_workers"],
             pin_memory=True,
+            sampler=sampler,  # Add sampler parameter
         )
 
         return dl

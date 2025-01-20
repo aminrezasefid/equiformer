@@ -110,6 +110,7 @@ def get_args_parser():
     # logging
     parser.add_argument("--print-freq", type=int, default=100)
     # task
+    parser.add_argument('--task-type',type=str,default="regr",choices=["regr","class"],help="model used for classification or regression")
     parser.add_argument('--standardize', type=bool, default=False, help='If true, multiply prediction by dataset std and add mean')
     parser.add_argument('--train-size', type=number, default=0.8, help='Percentage/number of samples in training set (None to use all remaining samples)')
     parser.add_argument('--val-size', type=number, default=0.1, help='Percentage/number of samples in validation set (None to use all remaining samples)')
@@ -146,7 +147,10 @@ def get_args_parser():
     return parser
 
 def main(args):
-
+    if args.task_type=="class":
+        metric_str="AUC"
+    else:
+        metric_str="MAE"
     utils.init_distributed_mode(args)
     is_main_process = (args.rank == 0)
 
@@ -181,6 +185,7 @@ def main(args):
         task_mean=task_mean, 
         task_std=task_std, 
         atomref=None, #train_dataset.atomref(args.target),
+        task_type=args.task_type,
         drop_path=args.drop_path,
         unique_atomic_numbers=data.get_unique_atomic_numbers())
     #_log.info(model)
@@ -205,12 +210,15 @@ def main(args):
     optimizer = create_optimizer(args, model)
     lr_scheduler, _ = create_scheduler(args, optimizer)
     criterion = None #torch.nn.MSELoss() #torch.nn.L1Loss() # torch.nn.MSELoss() 
-    if args.loss == 'l1':
-        criterion = torch.nn.L1Loss()
-    elif args.loss == 'l2':
-        criterion = torch.nn.MSELoss()
+    if args.task_type=="regr":
+        if args.loss == 'l1':
+            criterion = torch.nn.L1Loss()
+        elif args.loss == 'l2':
+            criterion = torch.nn.MSELoss()
+        else:
+            raise ValueError
     else:
-        raise ValueError
+        criterion = torch.nn.BCELoss()
 
     ''' AMP (from timm) '''
     # setup automatic mixed-precision (AMP) loss scaling and op casting
@@ -233,8 +241,10 @@ def main(args):
     
     best_epoch, best_train_err, best_val_err, best_test_err = 0, float('inf'), float('inf'), float('inf')
     best_ema_epoch, best_ema_val_err, best_ema_test_err = 0, float('inf'), float('inf')
-    
-    
+    best_val_loss=float('inf')
+    if args.task_type=="class":
+        best_train_err, best_val_err, best_test_err=0,0,0
+        best_ema_val_err, best_ema_test_err = 0,0
     for epoch in range(args.epochs):
         
         epoch_start_time = time.perf_counter()
@@ -244,21 +254,24 @@ def main(args):
         if args.distributed:
             train_loader.sampler.set_epoch(epoch)
         
-        train_err = train_one_epoch(model=model, criterion=criterion, norm_factor=norm_factor,
-             data_loader=train_loader, optimizer=optimizer,
+        train_err,train_loss = train_one_epoch(model=model, criterion=criterion, norm_factor=norm_factor,
+             data_loader=train_loader, optimizer=optimizer,task=args.task_type,
             device=device, epoch=epoch, model_ema=model_ema, 
             amp_autocast=amp_autocast, loss_scaler=loss_scaler,
             print_freq=args.print_freq, logger=_log)
         
-        val_err, val_loss = evaluate(model, norm_factor,  val_loader, device, 
+        val_err, val_loss = evaluate(model, norm_factor,  val_loader, device,task=args.task_type, 
             amp_autocast=amp_autocast, print_freq=args.print_freq, logger=_log)
         
-        test_err, test_loss = evaluate(model, norm_factor,  test_loader, device, 
+        test_err, test_loss = evaluate(model, norm_factor,  test_loader, device, task=args.task_type,
             amp_autocast=amp_autocast, print_freq=args.print_freq, logger=_log)
-        
+        #operator = '>' if args.task_type == "class" else '<'
         # record the best results
-        if val_err < best_val_err:
+        # Save the best model based on validation error using the appropriate comparison operator
+        #print(val_err,best_val_err)
+        if val_loss<best_val_loss:
             best_val_err = val_err
+            best_val_loss = val_loss
             best_test_err = test_err
             best_train_err = train_err
             best_epoch = epoch
@@ -266,16 +279,17 @@ def main(args):
             # Save the best model
             torch.save(model.state_dict(), f"{args.output_dir}/best_model.pth")
             _log.info(f"Saved best model at epoch {epoch} with val MAE: {best_val_err:.5f}")
+        
 
-        info_str = 'Epoch: [{epoch}] Target: [{target}] train MAE: {train_mae:.5f}, '.format(
-            epoch=epoch, target=data.target_idx, train_mae=train_err)
-        info_str += 'val MAE: {:.5f}, '.format(val_err)
-        info_str += 'test MAE: {:.5f}, '.format(test_err)
+        info_str = 'Epoch: [{epoch}] Train loss: {train_loss:.5f} Val loss: {val_loss:.5f} train {metric_str}: {train_mae:.5f}, '.format(
+            epoch=epoch, train_mae=train_err,metric_str=metric_str,train_loss=train_loss,val_loss=val_loss)
+        info_str += 'val {metric_str}: {:.5f}, '.format(val_err,metric_str=metric_str)
+        info_str += 'test {metric_str}: {:.5f}, '.format(test_err,metric_str=metric_str)
         info_str += 'Time: {:.2f}s'.format(time.perf_counter() - epoch_start_time)
         _log.info(info_str)
         
-        info_str = 'Best -- epoch={}, train MAE: {:.5f}, val MAE: {:.5f}, test MAE: {:.5f}\n'.format(
-            best_epoch, best_train_err, best_val_err, best_test_err)
+        info_str = 'Best -- epoch={}, train {metric_str}: {:.5f}, val {metric_str}: {:.5f}, test {metric_str}: {:.5f}\n'.format(
+            best_epoch, best_train_err, best_val_err, best_test_err,metric_str=metric_str)
         _log.info(info_str)
         
         # evaluation with EMA
@@ -294,13 +308,13 @@ def main(args):
     
             info_str = 'Epoch: [{epoch}] Target: [{target}] '.format(
                 epoch=epoch, target=args.target)
-            info_str += 'EMA val MAE: {:.5f}, '.format(ema_val_err)
-            info_str += 'EMA test MAE: {:.5f}, '.format(ema_test_err)
+            info_str += 'EMA val {metric_str}: {:.5f}, '.format(ema_val_err,metric_str=metric_str)
+            info_str += 'EMA test {metric_str}: {:.5f}, '.format(ema_test_err,metric_str=metric_str)
             info_str += 'Time: {:.2f}s'.format(time.perf_counter() - epoch_start_time)
             _log.info(info_str)
             
-            info_str = 'Best EMA -- epoch={}, val MAE: {:.5f}, test MAE: {:.5f}\n'.format(
-                best_ema_epoch, best_ema_val_err, best_ema_test_err)
+            info_str = 'Best EMA -- epoch={}, val {metric_str}: {:.5f}, test {metric_str}: {:.5f}\n'.format(
+                best_ema_epoch, best_ema_val_err, best_ema_test_err,metric_str=metric_str)
             _log.info(info_str)
 
 

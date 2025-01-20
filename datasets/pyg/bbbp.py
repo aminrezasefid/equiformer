@@ -25,41 +25,31 @@ import torch.nn.functional as F
 from torch_scatter import scatter
 
 from torch_geometric.data.data import BaseData
-from torch_geometric.data import (InMemoryDataset, download_url, extract_tar,
+from torch_geometric.data import (InMemoryDataset, download_url, extract_zip,
                                   Data)
 from torch_geometric.nn import radius_graph
 
 
 
-qm7_target_dict: Dict[int, str] = {
-    "u0_atom": 0,
+
+
+URLS = {
+    "precise3d": "https://drive.google.com/uc?export=download&id=1td1axN8ENHI1HaQ5w5YAEFQZfuhuNGdX",
+    "optimized3d": "https://drive.google.com/uc?export=download&id=1D44WQYZnxUjz70I51F1fnGWeSzPcteiv", ###### CHANGE ######
+    "rdkit3d": "https://drive.google.com/uc?export=download&id=1Jce3UNZxMq5DkLy7wfff-ZXMf9Imd3Xd",
+    "rdkit2d": "https://drive.google.com/uc?export=download&id=10zjvFLJ2dT8rriVbDn1o2suFtATM-7AX"
 }
 
-SKIP_LIST = [
-    "1 2.753415 1.686911 2.122795",
-    "1 4.940981 0.903782 0.860442",
-    "1 5.189535 2.297423 -0.368037",
-    "1 1.964094 4.093345 0.737567",
-]
-# for pre-processing target based on atom ref
-URLS = {
-    "precise3d": "https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/gdb7.tar.gz",
-    "rdkit3d": "https://drive.google.com/uc?export=download&id=1ROIGtfrxVP1f9NiQDLNLCtOzWEjLyxJq",
-    "optimized3d": "https://drive.google.com/uc?export=download&id=1FdIzgupmFGZHwkoxM5IdUY82VoGd-gvf",
-    "rdkit2d": "https://drive.google.com/uc?export=download&id=1cFE2X2PeGP9wVOhr4AOYvqTGTCvuFoM9",
-    "pubchem3d": "https://drive.google.com/uc?export=download&id=1zaNUsbLNARMU89sC9UsBLPkTnRG4sl0X",
-}
-class QM7(InMemoryDataset):
+bbbp_target_dict = {'p_np' : 0}
+
+class BBBP(InMemoryDataset):
     """
     1. This is the QM9 dataset, adapted from Pytorch Geometric to incorporate 
     cormorant data split. (Reference: Geometric and Physical Quantities improve 
     E(3) Equivariant Message Passing)
     2. Add pair-wise distance for each graph. """
 
-    raw_url = ('https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/'
-               'molnet_publish/qm9.zip')
-    raw_url2 = 'https://ndownloader.figshare.com/files/3195404'
-    processed_url = 'https://data.pyg.org/datasets/qm9_v3.zip'
+    
     @property
     def target_names(self) -> List[str]:
         """Returns the names of the available target properties.
@@ -67,9 +57,9 @@ class QM7(InMemoryDataset):
         Otherwise returns all available target names.
         """
         if hasattr(self, 'labels') and self.labels is not None:
-            return [name for name, idx in qm7_target_dict.items() 
+            return [name for name, idx in bbbp_target_dict.items() 
                    if idx in self.labels]
-        return list(qm7_target_dict.keys())
+        return list(bbbp_target_dict.keys())
     def __init__(
         self,
         root: str,
@@ -83,9 +73,9 @@ class QM7(InMemoryDataset):
         self.structure = structure
         self.raw_url = URLS[structure]
         self.labels = (
-            [qm7_target_dict[label] for label in dataset_args]
+            [bbbp_target_dict[label] for label in dataset_args]
             if dataset_args is not None
-            else list(qm7_target_dict.values())
+            else list(bbbp_target_dict.values())
         )
         transform = self._filter_label
         super().__init__(
@@ -97,14 +87,14 @@ class QM7(InMemoryDataset):
         if self.labels:
             batch.y = batch.y[:, self.labels]
         return batch
-    def mean(self, target: int) -> float:
-        y = torch.cat([self.get(i).y for i in range(len(self))], dim=0)
-        return float(y[:, target].mean())
+    # def mean(self, target: int) -> float:
+    #     y = torch.cat([self.get(i).y for i in range(len(self))], dim=0)
+    #     return float(y[:, target].mean())
 
 
-    def std(self, target: int) -> float:
-        y = torch.cat([self.get(i).y for i in range(len(self))], dim=0)
-        return float(y[:, target].std())
+    # def std(self, target: int) -> float:
+    #     y = torch.cat([self.get(i).y for i in range(len(self))], dim=0)
+    #     return float(y[:, target].std())
 
 
 
@@ -112,14 +102,15 @@ class QM7(InMemoryDataset):
     def raw_file_names(self) -> List[str]:
         try:
             import rdkit  # noqa
-
-            return (
-                ["gdb7.sdf", "gdb7.sdf.csv"]
-                if self.structure != "pubchem3d"
-                else ["qm7.sdf", "qm7.sdf.csv"]
-            )
+            file_names = {
+                "precise3d": ['pubchem.sdf', 'pubchem.sdf.csv'],
+                "optimized3d": ['rdkit_opt.sdf', 'rdkit_opt.sdf.csv'],
+                "rdkit3d": ['rdkit_3D.sdf', 'rdkit_3D.sdf.csv'],          ###### CHANGE ######
+                "rdkit2d": ['rdkit_graph.sdf', 'rdkit_graph.sdf.csv']
+            }
+            return file_names[self.structure]
         except ImportError:
-            return ["qm7_v3"]
+            return ImportError("Please install 'rdkit' to download the dataset.")
 
 
     @property
@@ -130,9 +121,10 @@ class QM7(InMemoryDataset):
     def download(self):
         try:
             import rdkit  # noqa
-
+            #import gdown
             file_path = download_url(self.raw_url, self.raw_dir)
-            extract_tar(file_path, self.raw_dir)
+            #gdown.download(self.raw_url, output=file_path, quiet=False)
+            extract_zip(file_path, self.raw_dir)
             os.unlink(file_path)
 
         except ImportError:
@@ -151,28 +143,27 @@ class QM7(InMemoryDataset):
             assert False, "Install rdkit-pypi"
 
         
-        types = {"H": 0, "C": 1, "N": 2, "O": 3, "F": 4, "S": 5}
-        bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
+        types = {'Cl': 0, 'C': 1, 'N': 2, 'O': 3, 'H': 4, 'F': 5, 'S': 6, 'Br': 7, 'I': 8, 'Na': 9, 'P': 10, 'Ca': 11, 'B': 12}   ###### CHANGE ######
+        bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3, BT.DATIVE: 4}
 
-        with open(self.raw_paths[1], "r") as f:
-            target = [
-                [float(x) for x in line.split(",")]
-                for line in f.read().split("\n")[1:-1]
-            ]
+        with open(self.raw_paths[1], 'r') as f:
+            target = [[float(x) if x != '' else -1
+                       for x in line.split(',')[0]]
+                      for line in f.read().split('\n')[1:-1]]
             y = torch.tensor(target, dtype=torch.float)
 
         suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=False,
                                    sanitize=False)
         data_list = []
-        inval_counter = 0
-        
         for i, mol in enumerate(tqdm(suppl)):
 
             N = mol.GetNumAtoms()
             conf = mol.GetConformer()
             pos = conf.GetPositions()
             pos = torch.tensor(pos, dtype=torch.float)
-
+            if torch.unique(pos, dim=0).size(0) != N:
+                # print(f"Skipping molecule {mol.GetProp('_Name')} as it contains overlapping atoms.")
+                continue
             #edge_index = radius_graph(pos, r=self.radius, loop=False)
             
             # build pair-wise edge graphs
@@ -237,22 +228,14 @@ class QM7(InMemoryDataset):
             x = torch.cat([x1, x2], dim=-1)
 
             name = mol.GetProp('_Name')
-            if name in SKIP_LIST:
-                inval_counter += 1
-                continue  
-            if self.structure == "precise3d":
-                try:
-                    name = Chem.MolToSmiles(mol, isomericSmiles=False)
-                    mol.UpdatePropertyCache()
-                except:
-                    continue
+            
 
             smiles = Chem.MolToSmiles(mol, isomericSmiles=True)      
 
             data = Data(x=x, pos=pos, z=z, edge_index=edge_index, 
-                edge_attr=edge_attr, name=name, index=i - inval_counter, 
+                edge_attr=edge_attr, name=name, index=i, 
                 smiles=smiles,
-                y=y[i - inval_counter].unsqueeze(0),
+                y=y[i].unsqueeze(0),
                 edge_d_index=edge_d_index, edge_d_attr=edge_d_attr)
             data_list.append(data)
             

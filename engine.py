@@ -4,8 +4,8 @@ from timm.utils import accuracy, ModelEmaV2, dispatch_clip_grad
 import time
 from torch_cluster import radius_graph
 import torch_geometric
-
-
+import numpy as np
+from sklearn.metrics import roc_auc_score
 ModelEma = ModelEmaV2
 
 
@@ -31,19 +31,21 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     norm_factor: list, 
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, 
+                    task,
                     model_ema: Optional[ModelEma] = None,  
                     amp_autocast=None,
                     loss_scaler=None,
                     clip_grad=None,
                     print_freq: int = 100, 
                     logger=None):
-    
+    if task=="class":
+        metric_str="AUC"
     model.train()
     criterion.train()
     
     loss_metric = AverageMeter()
-    mae_metric = AverageMeter()
-    
+    all_preds = []
+    all_labels = []
     start_time = time.perf_counter()
     
     task_mean = norm_factor[0] #model.task_mean
@@ -72,7 +74,17 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                 pred=pred[None,None]
             if len(pred.shape)==1:
                 pred=pred[:,None]
-            loss = criterion(pred, (data.y - task_mean) / task_std)
+            all_preds.append(pred.detach().cpu())
+            all_labels.append(data.y.detach().cpu())
+            if task=="regr":
+                loss = criterion(pred, (data.y - task_mean) / task_std)
+            else:
+                target_not_minus_one = data.y != -1
+                #print(pred[target_not_minus_one].shape,data.y[target_not_minus_one].shape)
+                loss = criterion(
+                    pred[target_not_minus_one], data.y[target_not_minus_one]
+                )
+                
         
         optimizer.zero_grad()
         if loss_scaler is not None:
@@ -87,41 +99,35 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         #err = (pred.detach() * task_std + task_mean) - data.y[:, target]
         #err_list += [err.cpu()]
         #print(pred.shape)
-        loss_metric.update(loss.item(), n=pred.shape[0])
-        err = pred.detach() * task_std + task_mean - data.y
-        mae_metric.update(torch.mean(torch.abs(err)).item(), n=pred.shape[0])
-        
-        if model_ema is not None:
-            model_ema.update(model)
-        
-        torch.cuda.synchronize()
-        
-        # logging
-        if step % print_freq == 0 or step == len(data_loader) - 1: #time.perf_counter() - wall_print > 15:
-            w = time.perf_counter() - start_time
-            e = (step + 1) / len(data_loader)
-            info_str = 'Epoch: [{epoch}][{step}/{length}] \t loss: {loss:.5f}, MAE: {mae:.5f}, time/step={time_per_step:.0f}ms, '.format( 
-                epoch=epoch, step=step, length=len(data_loader), 
-                mae=mae_metric.avg, 
-                loss=loss_metric.avg,
-                time_per_step=(1e3 * w / e / len(data_loader))
-                )
-            info_str += 'lr={:.2e}'.format(optimizer.param_groups[0]["lr"])
-            logger.info(info_str)
-        
-    return mae_metric.avg
+    auc_list=[]
+    loss_metric.update(loss.item(), n=pred.shape[0])
+    all_labels = torch.cat(all_labels, dim=0)
+    all_preds = torch.cat(all_preds, dim=0)
+    if task == "class":
+        for label in range(all_labels.shape[1]):
+            c_valid = all_labels[:, label] != -1
+            c_label, c_pred = all_labels[c_valid, label], all_preds[c_valid, label]
+            c_label = c_label.detach().cpu().numpy()
+            c_pred = c_pred.detach().cpu().numpy()
+            if len(np.unique(c_label)) > 1:
+                auc = roc_auc_score(c_label, c_pred)
+                auc_list.append(auc)
+        metric=torch.tensor(auc_list).mean()
+    else:
+        metric = (all_preds * task_std.to("cpu") + task_mean.to("cpu") - all_labels).mean()  
+    return metric,loss_metric.avg
 
 
-def evaluate(model, norm_factor, data_loader, device, amp_autocast=None, 
+def evaluate(model, norm_factor, data_loader, device,task="regr", amp_autocast=None, 
     print_freq=100, logger=None):
     
     model.eval()
     
     loss_metric = AverageMeter()
-    mae_metric = AverageMeter()
     criterion = torch.nn.L1Loss()
     criterion.eval()
-    
+    all_preds=[]
+    all_labels=[]
     task_mean = norm_factor[0] #model.task_mean
     task_std  = norm_factor[1] #model.task_std
     
@@ -141,12 +147,33 @@ def evaluate(model, norm_factor, data_loader, device, amp_autocast=None,
                 pred=pred[None,None]
             if len(pred.shape)==1:
                 pred=pred[:,None]
-            loss = criterion(pred, (data.y - task_mean) / task_std)
+            all_preds.append(pred.detach().cpu())
+            all_labels.append(data.y.detach().cpu())
+            if task=="regr":
+                loss = criterion(pred, (data.y - task_mean) / task_std)
+            else:
+                target_not_minus_one = data.y != -1
+                loss = criterion(
+                    pred[target_not_minus_one], data.y[target_not_minus_one]
+                )
             loss_metric.update(loss.item(), n=pred.shape[0])
-            err = pred.detach() * task_std + task_mean - data.y
-            mae_metric.update(torch.mean(torch.abs(err)).item(), n=pred.shape[0])
+    auc_list=[]
+    all_labels = torch.cat(all_labels, dim=0)
+    all_preds = torch.cat(all_preds, dim=0)
+    if task == "class":
+        for label in range(all_labels.shape[1]):
+            c_valid = all_labels[:, label] != -1
+            c_label, c_pred = all_labels[c_valid, label], all_preds[c_valid, label]
+            c_label = c_label.detach().cpu().numpy()
+            c_pred = c_pred.detach().cpu().numpy()
+            if len(np.unique(c_label)) > 1:
+                auc = roc_auc_score(c_label, c_pred)
+                auc_list.append(auc)
+        metric=torch.tensor(auc_list).mean()
+    else:
+        metric = (all_preds * task_std.to("cpu") + task_mean.to("cpu") - all_labels).mean()
         
-    return mae_metric.avg, loss_metric.avg
+    return metric, loss_metric.avg
 
 
 def compute_stats(data_loader, max_radius, logger, print_freq=1000):

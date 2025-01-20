@@ -9,9 +9,8 @@ source activate equiformer
 
 # Define a list of structures to iterate over
 structures=("precise3d" "rdkit3d" "optimized3d" "rdkit2d")  # Add your structures here
-structures=("rdkit3d")
-datasets=("QM7" "Lipophilicity" "Esol" "Freesolv")
-datasets=("QM9")
+#structures=("precise3d")
+datasets=("QM8")
 # Iterate over each structure
 for structure in "${structures[@]}"; do
     for dataset in "${datasets[@]}"; do
@@ -28,8 +27,7 @@ for structure in "${structures[@]}"; do
             --standardize True\
             --batch-size 128 \
             --radius 5.0 \
-            --output-channels 3\
-            --dataset-args homo,lumo,gap\
+            --output-channels 12\
             --num-basis 128 \
             --drop-path 0.0 \
             --weight-decay 5e-3 \
