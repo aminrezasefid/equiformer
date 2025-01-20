@@ -143,6 +143,9 @@ def get_args_parser():
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+    # Add new cuda device argument
+    parser.add_argument('--cuda-device', type=int, default=0,
+                        help='CUDA device index to use (default: 0)')
 
     return parser
 
@@ -174,7 +177,8 @@ def main(args):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(f'cuda:{args.cuda_device}' if torch.cuda.is_available() else 'cpu')
+    print(device)
     #device = "cpu"
     norm_factor = [task_mean.to(device), task_std.to(device)]
     ''' Network '''

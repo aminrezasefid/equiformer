@@ -894,7 +894,7 @@ class GraphAttentionTransformer(torch.nn.Module):
             x=edge_vec, normalize=True, normalization='component')
         #print(node_atom)
         
-        node_atom = self.atomic_mapping[node_atom].to(node_atom.device)
+        node_atom = self.atomic_mapping[node_atom.cpu()].to(node_atom.device)
         #node_atom = node_atom.new_tensor([-1, 0, -1, -1, -1, -1, 1, 2, 3, 4])[node_atom]
         atom_embedding, atom_attr, atom_onehot = self.atom_embed(node_atom)
 
