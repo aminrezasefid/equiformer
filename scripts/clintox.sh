@@ -9,7 +9,7 @@ source activate equiformer
 #CT_TOX
 # Define a list of structures to iterate over
 structures=("precise3d" "rdkit3d" "optimized3d" "rdkit2d")  # Add your structures here
-structures=("optimized3d")
+#structures=("optimized3d")
 datasets=("Clintox")
 # Iterate over each structure
 for structure in "${structures[@]}"; do
@@ -39,6 +39,7 @@ for structure in "${structures[@]}"; do
             --lr 5e-4 \
             --min-lr 1e-6 \
             --no-model-ema \
+            --cuda-device 3\
             --no-amp \
             --structure "$structure"
     done

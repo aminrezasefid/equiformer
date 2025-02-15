@@ -64,7 +64,7 @@ def test_model(args):
     # Prepare to collect results
     
     target_names = data.dataset.target_names
-    print(data.dataset.target_names)
+    #print(data.dataset.target_names)
     # Combine all target metrics into a single dictionary
     results = {"smiles":[]}
     for target in target_names:
