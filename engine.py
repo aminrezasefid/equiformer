@@ -6,6 +6,7 @@ from torch_cluster import radius_graph
 import torch_geometric
 import numpy as np
 from sklearn.metrics import roc_auc_score
+from tqdm import tqdm
 ModelEma = ModelEmaV2
 
 
@@ -48,15 +49,17 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     all_labels = []
     start_time = time.perf_counter()
     
-    task_mean = norm_factor[0] #model.task_mean
-    task_std  = norm_factor[1] #model.task_std
+    task_mean = norm_factor[0]
+    task_std  = norm_factor[1]
 
     #atomref = dataset.atomref()
     #if atomref is None:
     #    atomref = torch.zeros(100, 1)
     #atomref = atomref.to(device)
     
-    for step, data in enumerate(data_loader):
+    pbar = tqdm(enumerate(data_loader), total=len(data_loader), desc=f'Epoch {epoch}')
+    
+    for step, data in pbar:
         data = data.to(device)
         #if data.shape[0]==1
         #data.edge_d_index = radius_graph(data.pos, r=10.0, batch=data.batch, loop=True)
@@ -65,15 +68,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             pred = model(f_in=data.x, pos=data.pos, batch=data.batch, 
                 node_atom=data.z,
                 edge_d_index=data.edge_d_index, edge_d_attr=data.edge_d_attr)
-            pred = pred.squeeze()
+            #pred = pred.squeeze()
             #loss = (pred - data.y[:, target])
             #loss = loss.pow(2).mean()
             #atomref_value = atomref(data.z)
-
-            if len(pred.shape)==0:
-                pred=pred[None,None]
-            if len(pred.shape)==1:
-                pred=pred[:,None]
+            pred=pred.reshape(data.y.shape)
+            # if len(pred.shape)==0:
+            #     pred=pred[None,None]
+            # if len(pred.shape)==1:
+            #     pred=pred[:,None]
             all_preds.append(pred.detach().cpu())
             all_labels.append(data.y.detach().cpu())
             if task=="regr":
@@ -84,7 +87,6 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                 loss = criterion(
                     pred[target_not_minus_one], data.y[target_not_minus_one]
                 )
-                
         
         optimizer.zero_grad()
         if loss_scaler is not None:
@@ -99,8 +101,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         #err = (pred.detach() * task_std + task_mean) - data.y[:, target]
         #err_list += [err.cpu()]
         #print(pred.shape)
+        loss_metric.update(loss.item(), n=pred.shape[0])
+        pbar.set_postfix({'loss': f'{loss.item():.4f}'})
     auc_list=[]
-    loss_metric.update(loss.item(), n=pred.shape[0])
     all_labels = torch.cat(all_labels, dim=0)
     all_preds = torch.cat(all_preds, dim=0)
     if task == "class":
@@ -132,8 +135,9 @@ def evaluate(model, norm_factor, data_loader, device,task="regr", amp_autocast=N
     task_std  = norm_factor[1] #model.task_std
     
     with torch.no_grad():
+        pbar = tqdm(data_loader, total=len(data_loader), desc='Evaluating')
             
-        for data in data_loader:
+        for data in pbar:
             data = data.to(device)
             #data.edge_d_index = radius_graph(data.pos, r=10.0, batch=data.batch, loop=True)
             #data.edge_d_attr = data.edge_attr
@@ -142,11 +146,7 @@ def evaluate(model, norm_factor, data_loader, device,task="regr", amp_autocast=N
                 pred = model(f_in=data.x, pos=data.pos, batch=data.batch, 
                     node_atom=data.z,
                     edge_d_index=data.edge_d_index, edge_d_attr=data.edge_d_attr)
-                pred = pred.squeeze()
-            if len(pred.shape)==0:
-                pred=pred[None,None]
-            if len(pred.shape)==1:
-                pred=pred[:,None]
+            pred=pred.reshape(data.y.shape)
             all_preds.append(pred.detach().cpu())
             all_labels.append(data.y.detach().cpu())
             if task=="regr":
@@ -157,6 +157,7 @@ def evaluate(model, norm_factor, data_loader, device,task="regr", amp_autocast=N
                     pred[target_not_minus_one], data.y[target_not_minus_one]
                 )
             loss_metric.update(loss.item(), n=pred.shape[0])
+            pbar.set_postfix({'loss': f'{loss.item():.4f}'})
     auc_list=[]
     all_labels = torch.cat(all_labels, dim=0)
     all_preds = torch.cat(all_preds, dim=0)

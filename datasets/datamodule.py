@@ -143,7 +143,7 @@ class DataModule:
             shuffle = True
             
             # Add balanced sampling for BBBP dataset
-            unbalanced_datasets=["BBBP","Bace","Clintox"]
+            unbalanced_datasets=["BBBP","Bace","Clintox","HIV"]
             if self.hparams["dataset"] in unbalanced_datasets:
                 # Get labels for the subset
                 labels = torch.tensor([dataset[i]['y'] for i in range(len(dataset))])

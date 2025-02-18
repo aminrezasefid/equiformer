@@ -60,7 +60,7 @@ def get_args_parser():
     # training hyper-parameters
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--inference-batch-size", type=int, default=128)
+    parser.add_argument("--inference-batch-size", type=int, default=32)
     parser.add_argument('--model-ema', action='store_true')
     parser.add_argument('--no-model-ema', action='store_false', dest='model_ema')
     parser.set_defaults(model_ema=True)
