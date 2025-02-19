@@ -6,6 +6,7 @@ DATASET_ARGS=none
 STRUCTURES="precise3d,rdkit3d,optimized3d,rdkit2d"
 OUTPUT_CHANNELS=1
 BATCH_SIZE=64
+EPOCHS=100  # Add default epochs value
 #STRUCTURES="optimized3d"  # Default structure
 #DATASETS="Clintox"         # Default dataset
 
@@ -36,9 +37,13 @@ while [[ $# -gt 0 ]]; do
             BATCH_SIZE="$2"
             shift 2
             ;;
+        --epochs)  # Add new epochs argument
+            EPOCHS="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: ./tox21.sh --cuda-device <device> --structures <struct1,struct2,...> --datasets <dataset1,dataset2,...> --dataset-args <args> --output-channels <num> --batch-size <size>"
+            echo "Usage: ./tox21.sh --cuda-device <device> --structures <struct1,struct2,...> --datasets <dataset1,dataset2,...> --dataset-args <args> --output-channels <num> --batch-size <size> --epochs <num>"
             exit 1
             ;;
     esac
@@ -67,7 +72,7 @@ for structure in "${structures[@]}"; do
             --model-name 'graph_attention_transformer_nonlinear_l2'
             --input-irreps '5x0e'
             --dataset "$dataset"
-            --epochs 1
+            --epochs "$EPOCHS"  # Update epochs to use the variable
             --task-type "class"
             --dataset-root "$dataset_root"
             --feature-type 'one_hot'
